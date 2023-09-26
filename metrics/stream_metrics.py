@@ -1,5 +1,7 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
+import pdb
+from collections import ChainMap
 
 class _StreamMetrics(object):
     def __init__(self):
@@ -63,22 +65,34 @@ class StreamSegMetrics(_StreamMetrics):
         """
         hist = self.confusion_matrix
         acc = np.diag(hist).sum() / hist.sum()
-        acc_cls = np.diag(hist) / hist.sum(axis=1)
-        acc_cls = np.nanmean(acc_cls)
+        per_acc_cls = np.diag(hist) / hist.sum(axis=1)
+        acc_cls = np.nanmean(per_acc_cls)
         iu = np.diag(hist) / (hist.sum(axis=1) + hist.sum(axis=0) - np.diag(hist))
         mean_iu = np.nanmean(iu)
         freq = hist.sum(axis=1) / hist.sum()
         fwavacc = (freq[freq > 0] * iu[freq > 0]).sum()
         cls_iu = dict(zip(range(self.n_classes), iu))
-
-        return {
+        #pdb.set_trace()
+        results = {
+                "Mean IoU": mean_iu,
+                #"Class IoU": iu,
                 "Overall Acc": acc,
+                #"Per Class Acc": per_acc_cls,
                 "Mean Acc": acc_cls,
                 "FreqW Acc": fwavacc,
-                "Mean IoU": mean_iu,
-                "Class IoU": cls_iu,
+                
+                #"Class IoU": cls_iu,
+                
             }
+        class_labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus","car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "potted plant", "sheep", "sofa", "train", "tv/monitor"]
+        perclass_iou_dict = {class_labels:iu for class_labels, iu in zip(class_labels, iu)}
+        #perclass_acc_dict = {class_labels:per_acc_cls for class_labels, per_acc_cls in zip(class_labels, per_acc_cls)}
+
+        results.update(perclass_iou_dict)
+        #pdb.set_trace()
         
+        return results
+    
     def reset(self):
         self.confusion_matrix = np.zeros((self.n_classes, self.n_classes))
 

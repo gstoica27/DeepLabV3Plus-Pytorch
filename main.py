@@ -1,8 +1,9 @@
+#from tqdm import tqdm
 from tqdm import tqdm
 import network
 import utils
 import os
-import random
+import random 
 import argparse
 import numpy as np
 
@@ -18,7 +19,9 @@ from utils.visualizer import Visualizer
 from PIL import Image
 import matplotlib
 import matplotlib.pyplot as plt
-
+import pdb
+import csv
+import segmentation_models_pytorch as smp
 
 def get_argparser():
     parser = argparse.ArgumentParser()
@@ -61,7 +64,7 @@ def get_argparser():
                         help='batch size for validation (default: 4)')
     parser.add_argument("--crop_size", type=int, default=513)
 
-    parser.add_argument("--ckpt", default=None, type=str,
+    parser.add_argument("--ckpt", default="/srv/share4/pramesh39/voc/checkpoints/best_deeplabv3_resnet50_voc_os16.pth", type=str,
                         help="restore from checkpoint")
     parser.add_argument("--continue_training", action='store_true', default=False)
 
@@ -163,7 +166,7 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None):
         denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406],
                                    std=[0.229, 0.224, 0.225])
         img_id = 0
-
+    #pdb.set_trace()
     with torch.no_grad():
         for i, (images, labels) in tqdm(enumerate(loader)):
 
@@ -208,6 +211,30 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None):
     return score, ret_samples
 
 
+# use the train loader with data augmentation as this gives better results
+def reset_bn_stats(model, loader, reset=True):
+    """Reset batch norm stats if nn.BatchNorm2d present in the model."""
+    device = 0
+    #device = get_device(model)
+    has_bn = False
+    # resetting stats to baseline first as below is necessary for stability
+    for m in model.modules():
+        if type(m) == nn.BatchNorm2d:
+            if reset:
+                m.momentum = None # use simple average
+                m.reset_running_stats()
+            has_bn = True
+
+    if not has_bn:
+        return model
+
+    # run a single train epoch with augmentations to recalc stats
+    model.train()
+    with torch.no_grad():
+        for images, _ in tqdm(loader, desc='Resetting batch norm', position=0, leave=True):
+            _ = model(images.to(device, dtype=torch.float32))
+    return model
+
 def main():
     opts = get_argparser().parse_args()
     if opts.dataset.lower() == 'voc':
@@ -243,7 +270,7 @@ def main():
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
 
-    # Set up model (all models are 'constructed at network.modeling)
+    #Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     if opts.separable_conv and 'plus' in opts.model:
         network.convert_to_separable_conv(model.classifier)
@@ -288,8 +315,123 @@ def main():
     best_score = 0.0
     cur_itrs = 0
     cur_epochs = 0
+
+    use_pretrained_ckpts = False
+
+    if(use_pretrained_ckpts):
+
+        #Permuted model paths
+        # ckpt_paths = [
+        #     "/srv/share4/pramesh39/voc/checkpoints/best_deeplabv3_resnet50_voc_os16.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:nabird/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:nabird/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:nabird/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:nabird/match_tensors_permute/stopAt159/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_permute/stopAt159/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_permute/stopAt159/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:cub/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:cub/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:cub/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_resnet50_voc/voc:cub/match_tensors_permute/stopAt159/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt159/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/imagenet1kv1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/imagenet1kv1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/imagenet1kv1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/imagenet1kv1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt159/merged_model.pth"  
+        # ]
+
+        #Weight averaged model paths
+        # ckpt_paths = [
+        #     "/srv/share4/pramesh39/voc/checkpoints/best_deeplabv3_resnet50_voc_os16.pth",
+
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt159/merged_model.pth",
+
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_identity/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_identity/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_identity/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:oxford_pets/match_tensors_identity/stopAt159/merged_model.pth",
+
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:nabird/match_tensors_identity/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:nabird/match_tensors_identity/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:nabird/match_tensors_identity/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:nabird/match_tensors_identity/stopAt159/merged_model.pth",
+
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:cub/match_tensors_identity/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:cub/match_tensors_identity/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:cub/match_tensors_identity/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:cub/match_tensors_identity/stopAt159/merged_model.pth",
+
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_identity/stopAt33/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_identity/stopAt72/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_identity/stopAt129/merged_model.pth",
+        #     "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/deeplabv3_source/deeplabv3_resnet50_voc/voc:stanford_dogs/match_tensors_identity/stopAt159/merged_model.pth",
+            
+        # ]
+        #Peremute and weight avg baslines with new commit
+        ckpt_paths = [
+            "/srv/share4/pramesh39/voc/checkpoints/best_deeplabv3_resnet50_voc_os16.pth",
+            
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt159/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt129/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt72/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_identity/stopAt33/merged_model.pth",
+
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt159/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt129/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt72/merged_model.pth",
+            "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_permute/stopAt33/merged_model.pth"
+            
+        ]
+        # ckpt_paths = [
+        #             "/srv/share/gstoica3/checkpoints/deeplabv3/merged_models/zipit_v1/deeplabv3_source/deeplabv3_resnet50_voc/voc:imagenet1k_not_ffcv/match_tensors_zipit/best_model/stopAt159/merged_model.pth"
+        #     ]
+
+ 
+
+        results = []
+        save_csv = True
+        base_model = model
+        for path in ckpt_paths:
+            checkpoint = torch.load(path, map_location=torch.device('cpu'))
+            base_model.load_state_dict(checkpoint["model_state"])
+            model = nn.DataParallel(base_model)
+            model.to(device)
+            vis_sample_id = np.random.randint(0, len(val_loader), opts.vis_num_samples,
+                                        np.int32) if opts.enable_vis else None  # sample idxs for visualization
+            denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # denormalization for ori images
+            reset_bn_stats(model, train_loader)
+            model.eval()
+            val_score, ret_samples = validate(
+                opts=opts, model=model, loader=val_loader, device=device, metrics=metrics, ret_samples_ids=vis_sample_id)
+            val_score['model'] = path
+            results.append(val_score)
+            
+        if (save_csv):
+            with open('csvs/results_new_allbaselines.csv', 'w') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=list(results[0].keys()))
+                writer.writeheader()
+                writer.writerows(results)
+        pdb.set_trace()
+
+
+
+
+    
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        # https://github.com/VainF/DeepLabV3Plus-Pytorch/issues/8#issuecomment-605601402, @PytaichukBohdan
+    #     # https://github.com/VainF/DeepLabV3Plus-Pytorch/issues/8#issuecomment-605601402, @PytaichukBohdan
+
         checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'))
         model.load_state_dict(checkpoint["model_state"])
         model = nn.DataParallel(model)
@@ -313,10 +455,13 @@ def main():
     denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # denormalization for ori images
 
     if opts.test_only:
+        #reset_bn_stats(model, train_loader)
         model.eval()
         val_score, ret_samples = validate(
             opts=opts, model=model, loader=val_loader, device=device, metrics=metrics, ret_samples_ids=vis_sample_id)
-        print(metrics.to_str(val_score))
+        pdb.set_trace()
+        print(val_score)
+        #print(metrics.to_str(val_score))
         return
 
     interval_loss = 0
